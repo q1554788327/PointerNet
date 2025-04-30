@@ -4,17 +4,30 @@ import numpy as np
 import itertools
 from tqdm import tqdm
 
-
+# 使用动态规划算法(Held-Karp算法)求解TSP问题的最优路径
 def tsp_opt(points):
     """
-    Dynamic programing solution for TSP - O(2^n*n^2)
-    https://gist.github.com/mlalevic/6222750
+    动态规划求解TSP问题 - 时间复杂度O(2^n*n^2)
+    来源: https://gist.github.com/mlalevic/6222750
 
-    :param points: List of (x, y) points
-    :return: Optimal solution
+    参数:
+    points: 点列表，每个点是(x, y)坐标
+
+    返回:
+    最优路径，表示为点索引的数组
     """
 
     def length(x_coord, y_coord):
+        """
+        计算两点之间的欧氏距离
+        
+        参数:
+        x_coord: 第一个点的坐标
+        y_coord: 第二个点的坐标
+        
+        返回:
+        两点间距离
+        """
         return np.linalg.norm(np.asarray(x_coord) - np.asarray(y_coord))
 
     # Calculate all lengths
@@ -33,24 +46,47 @@ def tsp_opt(points):
     res = min([(A[d][0] + all_distances[0][d[1]], A[d][1]) for d in iter(A)])
     return np.asarray(res[1])
 
-
+# 随机生成指定数量的TSP实例，每个实例包含一组随机2D坐标点
 class TSPDataset(Dataset):
     """
-    Random TSP dataset
-
+    随机生成TSP问题的数据集
+    继承自PyTorch的Dataset类，用于数据加载器
     """
 
     def __init__(self, data_size, seq_len, solver=tsp_opt, solve=True):
+        """
+        初始化TSP数据集
+        
+        参数:
+        data_size: 数据集大小（样本数量）
+        seq_len: 序列长度（每个TSP问题中的城市数量）
+        solver: 解决TSP问题的函数，默认使用tsp_opt动态规划
+        solve: 是否在创建数据集时就计算最优解，默认为True
+        """
         self.data_size = data_size
         self.seq_len = seq_len
         self.solve = solve
         self.solver = solver
+        # 生成数据
         self.data = self._generate_data()
 
     def __len__(self):
+        """
+        返回数据集大小
+        用于len(dataset)操作
+        """
         return self.data_size
 
     def __getitem__(self, idx):
+        """
+        获取数据集中的一个样本
+        
+        参数:
+        idx: 样本索引
+        
+        返回:
+        包含点坐标和解决方案的字典
+        """
         tensor = torch.from_numpy(self.data['Points_List'][idx]).float()
         solution = torch.from_numpy(self.data['Solutions'][idx]).long() if self.solve else None
 
