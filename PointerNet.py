@@ -148,10 +148,10 @@ class Attention(nn.Module):
         self._inf = Parameter(torch.FloatTensor([float('-inf')]), requires_grad=False)
         # 激活函数
         self.tanh = nn.Tanh()
-        self.softmax = nn.Softmax()
+        self.softmax = nn.Softmax(dim=-1)   # 明确指定在最后一个维度上应用softmax
 
         # 初始化向量V为均匀分布
-        nn.init.uniform(self.V, -1, 1)
+        nn.init.uniform_(self.V, -1, 1)
 
     def forward(self, input,
                 context,
@@ -316,7 +316,7 @@ class Decoder(nn.Module):
             mask  = mask * (1 - one_hot_pointers)
 
             # Get embedded inputs by max indices
-            embedding_mask = one_hot_pointers.unsqueeze(2).expand(-1, -1, self.embedding_dim).byte()
+            embedding_mask = one_hot_pointers.unsqueeze(2).expand(-1, -1, self.embedding_dim).bool()
             decoder_input = embedded_inputs[embedding_mask.data].view(batch_size, self.embedding_dim)
 
             outputs.append(outs.unsqueeze(0))

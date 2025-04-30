@@ -17,18 +17,20 @@ from tqdm import tqdm      # 进度条显示
 # 导入自定义模块
 from PointerNet import PointerNet  # Pointer Network模型
 from Data_Generator import TSPDataset  # TSP数据集生成器
+# 导入模型保存所需模块
+import os
 
 # 创建命令行参数解析器
 parser = argparse.ArgumentParser(description="Pytorch implementation of Pointer-Net")
 
 # 数据相关参数
-parser.add_argument('--train_size', default=100000, type=int, help='训练数据大小') # 10万
-parser.add_argument('--val_size', default=10000, type=int, help='验证数据大小')
-parser.add_argument('--test_size', default=10000, type=int, help='测试数据大小')
+parser.add_argument('--train_size', default=1000, type=int, help='训练数据大小') # 10万
+parser.add_argument('--val_size', default=100, type=int, help='验证数据大小')
+parser.add_argument('--test_size', default=1000, type=int, help='测试数据大小')
 parser.add_argument('--batch_size', default=256, type=int, help='批次大小')
 
 # 训练相关参数
-parser.add_argument('--nof_epoch', default=50000, type=int, help='训练轮数')
+parser.add_argument('--nof_epoch', default=50, type=int, help='训练轮数')
 parser.add_argument('--lr', type=float, default=0.0001, help='学习率')
 
 # GPU相关参数
@@ -142,3 +144,30 @@ for epoch in range(params.nof_epoch):
 
     # 显示本轮的平均损失
     iterator.set_postfix(loss=np.average(batch_loss))
+    
+    # 显示本轮的平均损失
+    epoch_loss = np.average(batch_loss)
+    iterator.set_postfix(loss=epoch_loss)
+    
+    # 保存模型参数
+    if (epoch + 1) % 10 == 0:  # 每10个epoch保存一次
+        save_dir = 'checkpoints'
+        os.makedirs(save_dir, exist_ok=True)
+        torch.save({
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': model_optim.state_dict(),
+            'loss': epoch_loss,
+            'params': params,
+        }, os.path.join(save_dir, f'tsp{params.nof_points}_epoch{epoch+1}.pt'))
+        print(f'模型已保存至 {save_dir}/tsp{params.nof_points}_epoch{epoch+1}.pt')
+
+# 保存最终模型
+torch.save({
+    'epoch': params.nof_epoch,
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': model_optim.state_dict(),
+    'loss': np.mean(losses[-len(dataloader):]),  # 最后一个epoch的平均损失
+    'params': params,
+}, os.path.join('checkpoints', f'tsp{params.nof_points}_final.pt'))
+print(f'最终模型已保存至 checkpoints/tsp{params.nof_points}_final.pt')
