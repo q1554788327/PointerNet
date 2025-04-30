@@ -371,7 +371,7 @@ class PointerNet(nn.Module):
         self.decoder_input0 = Parameter(torch.FloatTensor(embedding_dim), requires_grad=False)
 
         # 初始化解码器初始输入为均匀分布
-        nn.init.uniform(self.decoder_input0, -1, 1)
+        nn.init.uniform_(self.decoder_input0, -1, 1)
 
     def forward(self, inputs):
         """

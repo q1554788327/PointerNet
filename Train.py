@@ -32,6 +32,7 @@ parser.add_argument('--batch_size', default=256, type=int, help='批次大小')
 # 训练相关参数
 parser.add_argument('--nof_epoch', default=50, type=int, help='训练轮数')
 parser.add_argument('--lr', type=float, default=0.0001, help='学习率')
+parser.add_argument('--ensemble_size', type=int, default=5, help='集成的模型数量')
 
 # GPU相关参数
 parser.add_argument('--gpu', default=True, action='store_true', help='是否启用GPU')
@@ -65,17 +66,31 @@ model = PointerNet(
     params.bidir            # 是否使用双向LSTM
 )
 
-# 创建TSP数据集
-dataset = TSPDataset(
+# 创建训练数据集
+train_dataset = TSPDataset(
     params.train_size,      # 训练数据大小
     params.nof_points       # TSP问题中的点数量
 )
 
-# 创建数据加载器，用于批量加载数据
-dataloader = DataLoader(
-    dataset,                # 数据集
+# 创建验证数据集
+val_dataset = TSPDataset(
+    params.val_size,        # 验证数据大小
+    params.nof_points       # TSP问题中的点数量
+)
+
+# 创建训练数据加载器
+train_dataloader = DataLoader(
+    train_dataset,          # 数据集
     batch_size=params.batch_size,  # 批次大小
     shuffle=True,           # 随机打乱数据
+    num_workers=4           # 并行加载进程数
+)
+
+# 创建验证数据加载器
+val_dataloader = DataLoader(
+    val_dataset,            # 数据集
+    batch_size=params.batch_size,  # 批次大小
+    shuffle=False,          # 不需要打乱验证数据
     num_workers=4           # 并行加载进程数
 )
 
@@ -98,18 +113,55 @@ model_optim = optim.Adam(
 )
 
 # 记录训练过程中的损失
-losses = []
+train_losses = []
+val_losses = []
+
+# Checkpoint Ensemble相关变量
+save_dir = 'checkpoints'
+os.makedirs(save_dir, exist_ok=True)
+
+# 计算保存检查点的间隔
+checkpoint_interval = params.nof_epoch // params.ensemble_size
+if checkpoint_interval == 0:
+    checkpoint_interval = 1
+    print(f"警告: ensemble_size ({params.ensemble_size}) 大于训练轮数 ({params.nof_epoch}).")
+    print(f"将保存每一轮的模型，共 {params.nof_epoch} 个检查点.")
+
+# 定义验证函数
+def validate():
+    model.eval()  # 设置为评估模式
+    val_loss = []
+    with torch.no_grad():  # 不计算梯度
+        for sample_batched in tqdm(val_dataloader, desc="Validating", unit="Batch"):
+            # 获取输入和目标
+            val_batch = Variable(sample_batched['Points'])
+            val_target = Variable(sample_batched['Solution'])
+            
+            if USE_CUDA:
+                val_batch = val_batch.cuda()
+                val_target = val_target.cuda()
+            
+            # 前向传播
+            o, p = model(val_batch)
+            o = o.contiguous().view(-1, o.size()[-1])
+            val_target = val_target.view(-1)
+            
+            # 计算损失
+            loss = CCE(o, val_target)
+            val_loss.append(loss.item())
+    
+    model.train()  # 恢复为训练模式
+    return np.mean(val_loss)
 
 # 开始训练循环
+print("Starting training...")
 for epoch in range(params.nof_epoch):
+    model.train()  # 确保模型处于训练模式
     batch_loss = []  # 每个epoch的批次损失
-    iterator = tqdm(dataloader, unit='Batch')  # 带进度条的数据迭代器
+    iterator = tqdm(train_dataloader, unit='Batch', desc=f'Epoch {epoch+1}/{params.nof_epoch}')
 
     # 遍历数据批次
     for i_batch, sample_batched in enumerate(iterator):
-        # 更新进度条描述
-        iterator.set_description('Batch %i/%i' % (epoch+1, params.nof_epoch))
-
         # 获取输入和目标
         train_batch = Variable(sample_batched['Points'])  # 城市坐标
         target_batch = Variable(sample_batched['Solution'])  # 最优路径
@@ -131,7 +183,7 @@ for epoch in range(params.nof_epoch):
         loss = CCE(o, target_batch)
 
         # 记录损失值
-        losses.append(loss.item())  # 注：新版PyTorch中应改为loss.item()
+        train_losses.append(loss.item())
         batch_loss.append(loss.item())
 
         # 反向传播和优化
@@ -140,34 +192,30 @@ for epoch in range(params.nof_epoch):
         model_optim.step()       # 更新参数
 
         # 更新进度条显示的损失值
-        iterator.set_postfix(loss='{}'.format(loss.item()))
+        iterator.set_postfix(train_loss=loss.item())
 
-    # 显示本轮的平均损失
-    iterator.set_postfix(loss=np.average(batch_loss))
+    # 计算本轮的平均损失
+    epoch_train_loss = np.average(batch_loss)
+    print(f"Epoch {epoch+1}/{params.nof_epoch}, Train Loss: {epoch_train_loss:.6f}")
     
-    # 显示本轮的平均损失
-    epoch_loss = np.average(batch_loss)
-    iterator.set_postfix(loss=epoch_loss)
+    # 在验证集上评估
+    epoch_val_loss = validate()
+    val_losses.append(epoch_val_loss)
+    print(f"Epoch {epoch+1}/{params.nof_epoch}, Validation Loss: {epoch_val_loss:.6f}")
     
-    # 保存模型参数
-    if (epoch + 1) % 10 == 0:  # 每10个epoch保存一次
-        save_dir = 'checkpoints'
-        os.makedirs(save_dir, exist_ok=True)
+    # 根据checkpoint_interval保存模型检查点
+    if (epoch + 1) % checkpoint_interval == 0 or epoch == params.nof_epoch - 1:
+        # 保存检查点
+        model_path = os.path.join(save_dir, f'tsp{params.nof_points}_checkpoint_{epoch+1}.pt')
         torch.save({
             'epoch': epoch + 1,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': model_optim.state_dict(),
-            'loss': epoch_loss,
+            'train_loss': epoch_train_loss,
+            'val_loss': epoch_val_loss,
             'params': params,
-        }, os.path.join(save_dir, f'tsp{params.nof_points}_epoch{epoch+1}.pt'))
-        print(f'模型已保存至 {save_dir}/tsp{params.nof_points}_epoch{epoch+1}.pt')
+        }, model_path)
+        print(f'保存检查点: {model_path}')
 
-# 保存最终模型
-torch.save({
-    'epoch': params.nof_epoch,
-    'model_state_dict': model.state_dict(),
-    'optimizer_state_dict': model_optim.state_dict(),
-    'loss': np.mean(losses[-len(dataloader):]),  # 最后一个epoch的平均损失
-    'params': params,
-}, os.path.join('checkpoints', f'tsp{params.nof_points}_final.pt'))
-print(f'最终模型已保存至 checkpoints/tsp{params.nof_points}_final.pt')
+# 训练结束提示
+print(f'训练完成! 已保存 {params.ensemble_size} 个检查点，用于后续模型集成。')
